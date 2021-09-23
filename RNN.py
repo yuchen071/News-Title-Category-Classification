@@ -19,7 +19,6 @@ from time import sleep
 import matplotlib.pyplot as plt
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# device = torch.device("cpu")
 
 #%% manual seed
 # import numpy as np
