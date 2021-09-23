@@ -118,4 +118,4 @@ dmypy.json
 
 .vector_cache/
 *.npz
-
+output_*.csv
