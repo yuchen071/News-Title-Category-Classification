@@ -6,7 +6,6 @@ from torch.utils.data import Dataset
 from torch.nn.utils import clip_grad_norm_
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
-# import string
 import spacy
 from collections import Counter
 from torchtext.vocab import Vocab # torchtext 0.9.0
