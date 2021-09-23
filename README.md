@@ -13,13 +13,15 @@ root
   └─ 📄 Transformer.py
 ```
 ### Dependecies
-* torchtext==0.9.0
-* tqdm==4.62.2
-* pandas==1.1.3
-* torch==1.8.0
-* spacy==3.1.3
-* matplotlib==3.3.4
-* numpy==1.19.2
+```
+torchtext==0.9.0
+tqdm==4.62.2
+pandas==1.1.3
+torch==1.8.0
+spacy==3.1.3
+matplotlib==3.3.4
+numpy==1.19.2
+```
 
 ## Train
 Run the following code to train with RNN:  
