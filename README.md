@@ -22,7 +22,7 @@ matplotlib==3.3.4
 numpy==1.19.2
 ```
 
-## Usage
+## How to use
 ### Train
 Run the following code to train with RNN:  
 ```
