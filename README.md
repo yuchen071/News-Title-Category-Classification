@@ -1,5 +1,4 @@
 # News Title Category Classification
-## About the Project
 Two different models (GRU RNN and Transformer) are implemented to classify news categories from their title. A `train.csv` file contains news titles from the BBC with their corresponding labels. 
 
 ## Requirements
