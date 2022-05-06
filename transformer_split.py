@@ -1,3 +1,4 @@
+#%%
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -5,7 +6,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 from torch.utils.data import random_split
 from torch.nn.utils import clip_grad_norm_
-from torch.nn.utils.rnn import pack_padded_sequence
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 import spacy
 from collections import Counter
@@ -26,22 +27,26 @@ PATH_TEST = "news_data/test 2.csv"
 # DATA = "Title"
 DATA = "Description"
 
-MAX_SEQ = 0    # set to 0 for auto max text len
-HID_DIM = 100    # hidden dimension of the rnn
-RNN_LAYERS = 2
-DROP = 0.3
+# max_seq clips text tok, set max_seq to 0 for auto max text len
+# num_head has to be dividable to embed_dim (300)
+# without scheduler, lr = 1e-4 optimal, 1e-3 and higher will not train well
+MAX_SEQ = 0     # Just needs to be longer than sequence
+NUM_HID = 600   # 
+NUM_HEAD = 10   #!
+NUM_LAYERS = 2  #! 2~3, over 4 will crash
+DROPOUT = 0.5   #! 0.1~0.3
 
 EPOCHS = 300
 LR = 1e-4
-BATCH_SIZE = 900
+BATCH_SIZE = 500
 CLIP_GRAD = 1
 
-SPLIT_PERCENT = 0.9	 # split percentage between training and validation dataset
+SPLIT_PERCENT = 0.99	 # split percentage between training and validation dataset
 
 #%% Dataset
 class trainDataset(Dataset):
     def __init__(self, categories, label_list, titles):
-        self.labels = [label_list.index(cate) for cate in categories]
+        self.labels = [label_list.index(cat) for cat in categories]
         self.titles = titles
 
     def __len__(self):
@@ -81,55 +86,96 @@ def collate_test(batch):
     text_list = torch.stack(text_list)
     return text_list.to(device), len_list
 
-
 #%% model
-class TextRNN(nn.Module):
-    def __init__(self, embed_weights, hidden_dim, num_class, num_layers=2, dropout=0.6):
-        super(TextRNN, self).__init__()
-        self.embed = nn.Embedding.from_pretrained(embed_weights).requires_grad_(True)
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
-        self.rnn = nn.GRU(input_size=embed_weights.shape[1],
-                            hidden_size=hidden_dim,
-                            bidirectional = True,
-                            num_layers = num_layers,
-                            batch_first = True,
-                            dropout=dropout
-                            )
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
 
-        self.fc_layer = nn.Sequential(
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0), :]
+        return self.dropout(x)
+
+
+class TransformerNet(nn.Module):
+    def __init__(self, embed_pretrain, padding_idx, max_sequence, n_hid, n_class, n_head=6, n_layers=2, dropout=0.5):
+        """
+        n_tokens: vocab size
+        embed_dim: size of vector for each token
+        encoder: embedding matrix with size (n_tokens x embed_dim), can be imported from vocab
+
+        n_class: number of classes to output
+        n_head: number of attention heads for trans_encode
+        n_hid: number of hidden nodes in NN part of trans_encode
+        n_layers: number of trans_encoderlayer in trans_encode
+        """
+        super(TransformerNet, self).__init__()
+        self.encoder = nn.Embedding.from_pretrained(embed_pretrain).requires_grad_(True)
+        self.embed_dim = embed_pretrain.shape[1]
+        self.n_tokens = embed_pretrain.shape[0]
+        self.pad_idx = padding_idx
+
+        self.pos_enc = PositionalEncoding(self.embed_dim, dropout)
+
+        encoder_layers = TransformerEncoderLayer(self.embed_dim, n_head, n_hid, dropout)
+        self.trans_enc = TransformerEncoder(encoder_layers, n_layers)
+
+        self.fc1 = nn.Sequential(
             nn.Dropout(dropout),
             nn.Tanh(),
-            nn.Linear(hidden_dim*2, num_class),
+            nn.Linear(self.embed_dim, self.embed_dim//4),
+            # nn.BatchNorm1d(self.embed_dim//4),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(self.embed_dim//4, n_class),
+
+            # nn.Linear(self.embed_dim, n_class),
             )
 
-    def forward(self, text, seq_len):
-        x = self.embed(text)                                # (batch_size, max_seq_len, input_size)
+    def forward(self, x):                                   # input: (batch, seq)
+        # sm = self.generate_square_subsequent_mask(x.size(1)).to(device)
+        km = self.get_padding_mask(x)
 
-        x = pack_padded_sequence(x, seq_len, batch_first=True, enforce_sorted=False)
-        x_o, x_h = self.rnn(x)  # gru
-        x = torch.cat((x_h[-2,:,:], x_h[-1,:,:]), dim = 1)  # (batch_size, hidden_size)
-        # x = x[-1,:,:] # if not bidirectional
-        x = self.fc_layer(x)
+        x = torch.transpose(x, 0, 1)                        # (seq, batch)
+        x = self.encoder(x) * math.sqrt(self.embed_dim)     # (seq, batch, emb_dim)
+        x = self.pos_enc(x)                                 # (seq, batch, emb_dim)
+
+        # x = self.trans_enc(x, mask=sm)                      # (seq, batch, emb_dim)
+        x = self.trans_enc(x, src_key_padding_mask=km)
+        # x = self.trans_enc(x)
+
+        # pure fc
+        # kmt = torch.transpose(km,0,1).unsqueeze(-1)
+        # x = x*kmt
+        # x = x[0]
+        x = x.mean(dim=0)                                   # (batch, emb_dim)
+        x = self.fc1(x)                                     # (batch, n_class)
+
         return x
 
-    def init_hidden(self, bsz):
-        weight = next(self.parameters())
-        return weight.new_zeros(self.num_layers, bsz, self.hidden_dim)
+    def generate_square_subsequent_mask(self, sz):
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def get_padding_mask(self, text):
+        mask = (text == self.pad_idx).to(device)  # (batch_size, word_pad_len)
+        return mask
 
 def init_weights(m):
     if isinstance(m, nn.Linear):
-        torch.nn.init.xavier_uniform_(m.weight)
-
-    elif type(m) in [nn.GRU, nn.LSTM]:
-        for param in m.parameters():
-            if len(param.shape) >= 2:
-                torch.nn.init.orthogonal_(param.data)
-            else:
-                torch.nn.init.uniform_(param.data, -0.1, 0.1)
+        nn.init.xavier_uniform_(m.weight)
+        nn.init.zeros_(m.bias)
 
 class CosineWarmupScheduler(optim.lr_scheduler._LRScheduler):
-
     def __init__(self, optimizer, warmup, max_iters):
         self.warmup = warmup
         self.max_num_iters = max_iters
@@ -148,7 +194,9 @@ class CosineWarmupScheduler(optim.lr_scheduler._LRScheduler):
 #%% train
 def train(df_train, df_test, label_list):
 
-    # text preprocess
+# =============================================================================
+#     text preprocess
+# =============================================================================
     print("Text Preprocessing...", end="")
     spacy_en = spacy.load('en_core_web_sm', disable=['parser'])
 
@@ -156,20 +204,21 @@ def train(df_train, df_test, label_list):
         title = title.strip()
         title_doc = spacy_en(title)
 
-        # # method 1
-        # with title_doc.retokenize() as retokenizer:
-        #     for ent in title_doc.ents:
-        #         if ent.label_ in filter_ent:
-        #             retokenizer.merge(title_doc[ent.start:ent.end], attrs={"LOWER": ent.label_})
-        # title_tok = [word.lower_ for word in title_doc if not word.is_punct]
-
-        # method 2
+        # method 1
         with title_doc.retokenize() as retokenizer:
             for ent in title_doc.ents:
                 if ent.label_ in filter_ent:
-                    retokenizer.merge(title_doc[ent.start:ent.end], attrs={"LEMMA": ent.label_})
-        title_tok = [word.lemma_ for word in title_doc if not word.is_punct and not word.is_stop]
-        title_tok = [word.lower() if word not in filter_entity else word for word in title_tok]
+                    retokenizer.merge(title_doc[ent.start:ent.end], attrs={"LOWER": ent.label_})
+        title_tok = [word.lower_ for word in title_doc if not word.is_punct]
+
+        # # method 2
+        # with title_doc.retokenize() as retokenizer:
+        #     for ent in title_doc.ents:
+        #         if ent.label_ in filter_ent:
+        #             retokenizer.merge(title_doc[ent.start:ent.end], attrs={"LEMMA": ent.label_})
+        # title_tok = [word.lemma_ for word in title_doc if not word.is_punct and not word.is_stop]
+        # title_tok = [word.lower() if word not in filter_entity else word for word in title_tok]
+        
         return title_tok
 
     filter_entity = ["MONEY", "TIME", "PERCENT", "DATE"]
@@ -188,12 +237,13 @@ def train(df_train, df_test, label_list):
             if len(text_tok) > max_seq:
                 max_seq = len(text_tok)
     if MAX_SEQ == 0:
-        max_seq += 10
+        max_seq += 2
 
     for text_tok in test_tok:
         counter.update(text_tok)
 
-    vocab = Vocab(counter, min_freq=1, vectors='glove.6B.300d', specials=specials)
+    vocab = Vocab(counter, min_freq=2, vectors='glove.6B.300d', specials=specials)
+    pad_idx = vocab["<pad>"]
     embedding = vocab.vectors
 
     def text_pipeline(text_tok, max_seq):
@@ -211,6 +261,9 @@ def train(df_train, df_test, label_list):
 
     print("Done!")
 
+# =============================================================================
+#     make dataset and split to train and validation
+# =============================================================================
     # make dataset and split to train and validation
     data_train = trainDataset(df_train['Category'], label_list, train_list)
     num_train = int(len(data_train) * SPLIT_PERCENT)
@@ -225,38 +278,47 @@ def train(df_train, df_test, label_list):
 
     # init model
     num_class = len(label_list)
-    model = TextRNN(embed_weights=embedding,
-                     hidden_dim=HID_DIM,
-                     num_class=num_class,
-                     num_layers=RNN_LAYERS,
-                     dropout=DROP
-                     )
-    model.apply(init_weights)
-    model.init_hidden(BATCH_SIZE)
+    model = TransformerNet(
+        embedding,
+        padding_idx = pad_idx,
+        max_sequence = max_seq,
+        n_hid = NUM_HID,
+        n_class = num_class,
+        n_head = NUM_HEAD,
+        n_layers = NUM_LAYERS,
+        dropout = DROPOUT
+        )
+    # model.apply(init_weights)
     model.to(device)
 
     criterion = torch.nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=LR)
+    # ref: attention is all u need
+    optimizer = optim.AdamW(model.parameters(), lr=LR,
+                            weight_decay=1e-6,
+                            betas=(0.9, 0.98))
     scheduler = CosineWarmupScheduler(optimizer=optimizer,
-                                      warmup=5,
+                                      warmup=10,
                                       max_iters=EPOCHS)
+    
+    torch.autograd.set_detect_anomaly(True) # debug tracking
 
-    # train
+# =============================================================================
+#     train
+# =============================================================================
     print("Training...")
     sleep(0.3)
     train_loss_hist, train_acc_hist = [], []
     valid_loss_hist, valid_acc_hist = [], []
 
-    t = tqdm(range(EPOCHS), ncols=200, bar_format='{l_bar}{bar:15}{r_bar}{bar:-10b}', unit=' epoch')
+    t = tqdm(range(EPOCHS), ncols=200, bar_format='{l_bar}{bar:15}{r_bar}{bar:-10b}', unit='epoch')
+    model.train()
     for epoch in t:
-        model.train()
-
         train_loss, train_acc, train_count = 0, 0, 0
         batch_acc, batch_count = 0, 0
-        for batch_id, (label, text, seq_len) in enumerate(trainloader):
+        for batch_id, (label, text, _) in enumerate(trainloader):
             optimizer.zero_grad()
 
-            out = model(text, seq_len)
+            out = model(text)
             loss = criterion(out, label)
             loss.backward()
             clip_grad_norm_(model.parameters(), CLIP_GRAD)
@@ -274,8 +336,8 @@ def train(df_train, df_test, label_list):
         model.eval()
         valid_loss, valid_acc, valid_count = 0, 0, 0
         with torch.no_grad():
-            for batch_id, (label, text, seq_len) in enumerate(validloader):
-                out = model(text, seq_len)
+            for batch_id, (label, text, _) in enumerate(validloader):
+                out = model(text)
                 loss2 = criterion(out, label)
 
                 valid_loss += loss2.item()
@@ -316,7 +378,9 @@ def train(df_train, df_test, label_list):
     plt.xlabel("Epochs")
     plt.show()
 
-    # eval
+# =============================================================================
+#     eval
+# =============================================================================
     print("Eval...", end="")
     # test_tok = [tokenizer(title, filter_entity) for title in df_test["Title"]]
     test_list = [text_pipeline(text_tok, max_seq) for text_tok in test_tok]
@@ -328,20 +392,19 @@ def train(df_train, df_test, label_list):
     ans_list = []
     with torch.no_grad():
         for batch_id, (text, seq_len) in enumerate(testloader):
-            out = model(text, seq_len)
+            out = model(text)
             ans_list.extend(out.argmax(1).tolist())
 
     # print(len(ans_list))
     ans_labeled = [label_list[idx] for idx in ans_list]
     id_list = list(range(len(ans_list)))
 
-    with open("output_RNN.csv", "w", newline="") as fp:
+    with open("output_transformer.csv", "w", newline="") as fp:
         fp.write("Id,Category\n")
         c_writer = csv.writer(fp)
         c_writer.writerows(zip(id_list, ans_labeled))
 
     print("Done!")
-
 
 #%% main
 if __name__ == "__main__":
@@ -350,3 +413,7 @@ if __name__ == "__main__":
     label_list = sorted(list(set(df_train['Category'])))
 
     train(df_train, df_test, label_list)
+
+    if str(device) == 'cuda':
+        torch.cuda.empty_cache()
+

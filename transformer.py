@@ -1,3 +1,4 @@
+#%%
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -19,32 +20,24 @@ import matplotlib.pyplot as plt
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-#%% manual seed
-# import numpy as np
-# import random
-# seed = 86
-# torch.manual_seed(seed)
-# torch.cuda.manual_seed(seed)
-# torch.cuda.manual_seed_all(seed)
-# np.random.seed(seed)
-# random.seed(seed)
-
 #%% Params
-PATH_TRAIN = "news_data/train.csv"
-PATH_TEST = "news_data/test.csv"
+PATH_TRAIN = "news_data/train 2.csv"
+PATH_TEST = "news_data/test 2.csv"
+# DATA = "Title"
+DATA = "Description"
 
 # max_seq clips text tok, set max_seq to 0 for auto max text len
 # num_head has to be dividable to embed_dim (300)
 # without scheduler, lr = 1e-4 optimal, 1e-3 and higher will not train well
-MAX_SEQ = 15    # Just needs to be longer than sequence
-NUM_HID = 800   # 300*4
+MAX_SEQ = 0     # Just needs to be longer than sequence
+NUM_HID = 600   # 
 NUM_HEAD = 10   #!
-NUM_LAYERS = 3  #! 2~3, over 4 will crash
-DROPOUT = 0.1   #! 0.1~0.3
+NUM_LAYERS = 2  #! 2~3, over 4 will crash
+DROPOUT = 0.5   #! 0.1~0.3
 
 EPOCHS = 300
-LR = 8e-5
-BATCH_SIZE = 900
+LR = 1e-4
+BATCH_SIZE = 500
 CLIP_GRAD = 1
 
 #%% Dataset
@@ -171,7 +164,7 @@ class TransformerNet(nn.Module):
         return mask
 
     def get_padding_mask(self, text):
-        mask = (text != self.pad_idx).to(device)  # (batch_size, word_pad_len)
+        mask = (text == self.pad_idx).to(device)  #! (batch_size, word_pad_len)
         return mask
 
 def init_weights(m):
@@ -208,20 +201,27 @@ def train(df_train, df_test, label_list):
         title = title.strip()
         title_doc = spacy_en(title)
 
+        # method 1
         with title_doc.retokenize() as retokenizer:
             for ent in title_doc.ents:
                 if ent.label_ in filter_ent:
                     retokenizer.merge(title_doc[ent.start:ent.end], attrs={"LOWER": ent.label_})
-                    # retokenizer.merge(title_doc[ent.start:ent.end], attrs={"LEMMA": ent.label_})
-
         title_tok = [word.lower_ for word in title_doc if not word.is_punct]
-        # title_tok = [word.lower_ for word in title_doc if not word.is_punct and not word.is_stop]
+
+        # # method 2
+        # with title_doc.retokenize() as retokenizer:
+        #     for ent in title_doc.ents:
+        #         if ent.label_ in filter_ent:
+        #             retokenizer.merge(title_doc[ent.start:ent.end], attrs={"LEMMA": ent.label_})
+        # title_tok = [word.lemma_ for word in title_doc if not word.is_punct and not word.is_stop]
         # title_tok = [word.lower() if word not in filter_entity else word for word in title_tok]
+        
         return title_tok
 
+
     filter_entity = ["MONEY", "TIME", "PERCENT", "DATE"]
-    train_tok = [tokenizer(title, filter_entity) for title in df_train["Title"]]
-    test_tok = [tokenizer(title, filter_entity) for title in df_test["Title"]]
+    train_tok = [tokenizer(title, filter_entity) for title in df_train[DATA]]
+    test_tok = [tokenizer(title, filter_entity) for title in df_test[DATA]]
     # specials = ["<pad>", "<unk>", "<sos>"]
     specials = ["<pad>", "<unk>"]
     specials.extend(filter_entity)
@@ -233,6 +233,8 @@ def train(df_train, df_test, label_list):
         if MAX_SEQ == 0:
             if len(text_tok) > max_seq:
                 max_seq = len(text_tok)
+    if MAX_SEQ == 0:
+        max_seq += 10
 
     for text_tok in test_tok:
         counter.update(text_tok)
@@ -261,8 +263,9 @@ def train(df_train, df_test, label_list):
 # =============================================================================
     data_train = trainDataset(df_train['Category'], label_list, train_list)
 
-    print("Train data: %d, Train batches: %.1f\n" %  \
-          (len(data_train), len(data_train)/BATCH_SIZE))
+    print(f"Train on: {DATA}")
+    print("Train data: %d, Train batches: %.1f, max seq len: %d\n" %  \
+          (len(data_train), len(data_train)/BATCH_SIZE, max_seq))
 
     trainloader = DataLoader(data_train, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_train)
 
