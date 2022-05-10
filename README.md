@@ -7,19 +7,21 @@ The root folder should be structured as follows:
 📁 root
   ├─ 📁 news data
   |  ├─ 📗 test.csv
-  |  └─ 📗 train.csv
-  ├─ 📄 RNN.py
-  └─ 📄 Transformer.py
+  |  ├─ 📗 train.csv
+  |  ├─ 📗 test 2.csv
+  |  └─ 📗 train 2.csv
+  ├─ 📄 rnn.py
+  ├─ 📄 transformer.py
+  └─ 📄 transformer_split.py
 ```
 ### Dependecies
 ```
+matplotlib==3.5.2
+pandas==1.4.2
+spacy==3.3.0
+torch==1.8.0+cu111
 torchtext==0.9.0
-tqdm==4.62.2
-pandas==1.1.3
-torch==1.8.0
-spacy==3.1.3
-matplotlib==3.3.4
-numpy==1.19.2
+tqdm==4.64.0
 ```
 
 ## How to use

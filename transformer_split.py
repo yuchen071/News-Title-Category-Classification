@@ -36,7 +36,7 @@ NUM_HEAD = 10   #!
 NUM_LAYERS = 2  #! 2~3, over 4 will crash
 DROPOUT = 0.5   #! 0.1~0.3
 
-EPOCHS = 300
+EPOCHS = 100
 LR = 1e-4
 BATCH_SIZE = 500
 CLIP_GRAD = 1
@@ -129,15 +129,15 @@ class TransformerNet(nn.Module):
         self.trans_enc = TransformerEncoder(encoder_layers, n_layers)
 
         self.fc1 = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Tanh(),
-            nn.Linear(self.embed_dim, self.embed_dim//4),
-            # nn.BatchNorm1d(self.embed_dim//4),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(self.embed_dim//4, n_class),
+            # nn.Dropout(dropout),
+            # nn.Tanh(),
+            # nn.Linear(self.embed_dim, self.embed_dim//4),
+            # # nn.BatchNorm1d(self.embed_dim//4),
+            # nn.ReLU(),
+            # nn.Dropout(dropout),
+            # nn.Linear(self.embed_dim//4, n_class),
 
-            # nn.Linear(self.embed_dim, n_class),
+            nn.Linear(self.embed_dim, n_class),
             )
 
     def forward(self, x):                                   # input: (batch, seq)
@@ -242,7 +242,7 @@ def train(df_train, df_test, label_list):
     for text_tok in test_tok:
         counter.update(text_tok)
 
-    vocab = Vocab(counter, min_freq=2, vectors='glove.6B.300d', specials=specials)
+    vocab = Vocab(counter, min_freq=1, vectors='glove.6B.300d', specials=specials)
     pad_idx = vocab["<pad>"]
     embedding = vocab.vectors
 

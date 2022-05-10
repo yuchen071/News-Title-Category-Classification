@@ -33,7 +33,7 @@ MAX_SEQ = 0     # Just needs to be longer than sequence
 NUM_HID = 600   # 
 NUM_HEAD = 10   #!
 NUM_LAYERS = 2  #! 2~3, over 4 will crash
-DROPOUT = 0.5   #! 0.1~0.3
+DROPOUT = 0.3   #! 0.1~0.3
 
 EPOCHS = 300
 LR = 1e-4
@@ -126,34 +126,42 @@ class TransformerNet(nn.Module):
         self.trans_enc = TransformerEncoder(encoder_layers, n_layers)
 
         self.fc1 = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Tanh(),
-            nn.Linear(self.embed_dim, self.embed_dim//4),
-            # nn.BatchNorm1d(self.embed_dim//4),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(self.embed_dim//4, n_class),
+            # method 1
+            # nn.Dropout(dropout),
+            # nn.Tanh(),
+            # nn.Linear(self.embed_dim, self.embed_dim//4),
+            # # nn.BatchNorm1d(self.embed_dim//4),
+            # nn.ReLU(),
+            # nn.Dropout(dropout),
+            # nn.Linear(self.embed_dim//4, n_class),
 
-            # nn.Linear(self.embed_dim, n_class),
+            # method 2
+            nn.Linear(self.embed_dim, n_class),
             )
 
     def forward(self, x):                                   # input: (batch, seq)
-        # sm = self.generate_square_subsequent_mask(x.size(1)).to(device)
+        # sm = self.generate_square_subsequent_mask(x.size(1))
         km = self.get_padding_mask(x)
 
         x = torch.transpose(x, 0, 1)                        # (seq, batch)
         x = self.encoder(x) * math.sqrt(self.embed_dim)     # (seq, batch, emb_dim)
         x = self.pos_enc(x)                                 # (seq, batch, emb_dim)
 
-        # x = self.trans_enc(x, mask=sm)                      # (seq, batch, emb_dim)
+        # x = self.trans_enc(x, mask=sm)
         x = self.trans_enc(x, src_key_padding_mask=km)
-        # x = self.trans_enc(x)
-
-        # pure fc
+        # x = self.trans_enc(x)                               # (seq, batch, emb_dim)
+        
         # kmt = torch.transpose(km,0,1).unsqueeze(-1)
         # x = x*kmt
+        
+        # ---
+        # method 1
         # x = x[0]
+        
+        # method 2
         x = x.mean(dim=0)                                   # (batch, emb_dim)
+        # ---
+        
         x = self.fc1(x)                                     # (batch, n_class)
 
         return x
@@ -161,11 +169,11 @@ class TransformerNet(nn.Module):
     def generate_square_subsequent_mask(self, sz):
         mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        return mask
+        return mask.to(device)
 
     def get_padding_mask(self, text):
-        mask = (text == self.pad_idx).to(device)  #! (batch_size, word_pad_len)
-        return mask
+        mask = (text == self.pad_idx)  #! (batch_size, word_pad_len)
+        return mask.to(device)
 
 def init_weights(m):
     if isinstance(m, nn.Linear):
@@ -208,7 +216,7 @@ def train(df_train, df_test, label_list):
                     retokenizer.merge(title_doc[ent.start:ent.end], attrs={"LOWER": ent.label_})
         title_tok = [word.lower_ for word in title_doc if not word.is_punct]
 
-        # # method 2
+        # method 2
         # with title_doc.retokenize() as retokenizer:
         #     for ent in title_doc.ents:
         #         if ent.label_ in filter_ent:
@@ -220,6 +228,7 @@ def train(df_train, df_test, label_list):
 
 
     filter_entity = ["MONEY", "TIME", "PERCENT", "DATE"]
+    # filter_entity = []
     train_tok = [tokenizer(title, filter_entity) for title in df_train[DATA]]
     test_tok = [tokenizer(title, filter_entity) for title in df_test[DATA]]
     # specials = ["<pad>", "<unk>", "<sos>"]
